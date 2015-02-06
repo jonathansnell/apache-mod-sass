@@ -1,32 +1,28 @@
 # mod_sass
 
 mod_sass is Sass handler module for Apache HTTPD Server.
+Tested on Debian/GNU 8 (Testing / Sid) with Apache 2.4.10
 
 ## Dependencies
 
-* [libsass](https://github.com/hcatlin/libsass/)
+* [libsass](https://github.com/hcatlin/libsass/) (Release 3.1.0)
 
 ## Build
 
-    % git clone --recursive --depth=1 https://github.com/kjdev/apache-mod-sass.git
-    % ./autogen.sh (or autoreconf -i)
-    % ./configure [OPTION]
-    % make
-    % make install
+    git clone git@github.com:EggieCode/apache-mod-sass.git apache-mod-sass
+    cd apache-mod-sass
+    git clone --branch 3.1.0 git@github.com:sass/libsass.git libsass
+    cd libsass
+    make
+    sudo make install
+    cd ../
+    make
+    sudo make install
 
-### Build Options
-
-apache path.
-
-* --with-apxs=PATH  [default=yes]
-* --with-apr=PATH  [default=yes]
 
 ## Configration
 
-httpd.conf:
-
-    # Load module
-    LoadModule sass_module modules/mod_sass.so
+sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
 
     # Handler sass script
     AddHandler sass-script .scss
@@ -37,10 +33,10 @@ httpd.conf:
     # Output to CSS file [On | Off]
     SassOutput Off
 
-    # Include paths [PATH]
+    # Include paths (optimal) [PATH]
     SassIncludePaths path/to/inc
 
-    # Image Path [PATH]
+    # Image Path (optimal) [PATH]
     SassImagePath path/to/img
 
 ## Example
