@@ -9,9 +9,9 @@ Tested on Debian/GNU 8 (Testing / Sid) with Apache 2.4.10
 
 ## Build
 
-    git clone git@github.com:EggieCode/apache-mod-sass.git apache-mod-sass
+    git clone https://github.com/EggieCode/apache-mod-sass.git apache-mod-sass
     cd apache-mod-sass
-    git clone --branch 3.1.0 git@github.com:sass/libsass.git libsass
+    git clone --branch 3.1.0 https://github.com/sass/libsass.git libsass
     cd libsass
     make
     sudo make install
