@@ -6,12 +6,19 @@
 **    # httpd.conf
 **    LoadModule sass_module modules/mod_sass.so
 **    <IfModule sass_module>
-**      AddHandler sass-script .css
-**      AddHandler sass-script .map
-**      SassOutputStyle  Nested (Expanded | Nested | Compact | Compressed)
-**      SassOutput       Off (On | Off)
-**      SassDisplayError Off (On | Off)
-**      SassIncludePaths path/to/sass
+**      AddHandler            sass-script .css
+**      AddHandler            sass-script .map
+**      SassOutput            Off (On | Off)
+**      SassDisplayError      Off (On | Off)
+**      SassOutputStyle       Nested (Expanded | Nested | Compact | Compressed)
+**      SassSourceComments    Off (On | Off)
+**      SassOmitSourceMapUrl  Off (On | Off)
+**      SassSourceMapEmbed    Off (On | Off)
+**      SassSourceMapContents Off (On | Off)
+**      SassSourceMapRoot     Pass-through as sourceRoot property
+**      SassIncludePaths      Colon-separated list of include paths; Semicolon-separated on Windows
+**      SassPluginPaths       Colon-separated list of plugin paths; Semicolon-separated on Windows
+**      SassPrecision         Precision for outputting fractional numbers
 **    </IfModule sass_module>
 */
 
@@ -74,16 +81,23 @@ typedef struct {
     int is_output;
     int display_error;
     char *output_style;
+    int source_comments;
+    int omit_source_map_url;
+    int source_map_embed;
+    int source_map_contents;
+    char *source_map_root;
     char *include_paths;
+    char *plugin_paths;
+    int precision;
 } sass_dir_config_t;
 
 module AP_MODULE_DECLARE_DATA sass_module;
 
 // Stackoverflow script to get filename extention
 const char *get_filename_ext(const char *filename) {
-	const char *dot = strrchr(filename, '.');
-	if(!dot || dot == filename) return NULL;
-		return dot;
+    const char *dot = strrchr(filename, '.');
+    if(!dot || dot == filename) return NULL;
+        return dot;
 }
 
 int exists(const char *filename) {
@@ -134,10 +148,10 @@ sass_handler(request_rec *r)
     int retval = OK;
     sass_dir_config_t *config;
     struct sass_file_context *context;
-    char *css_name, *map_name, *scss_name;
-    char *uri_base, *css_uri, *map_uri;
+    char *css_name, *map_name, *sass_name, *scss_name;
     int is_css = 0;
     int is_map = 0;
+    int is_sass = 0;
 
     const char *ext = get_filename_ext(r->filename);
     const char *fbase = apr_pstrndup(r->pool, r->filename, ext - r->filename);
@@ -158,12 +172,14 @@ sass_handler(request_rec *r)
 
     css_name  = apr_psprintf(r->pool, "%s.css",  fbase);
     map_name  = apr_psprintf(r->pool, "%s.map",  fbase);
+    sass_name = apr_psprintf(r->pool, "%s.sass", fbase);
     scss_name = apr_psprintf(r->pool, "%s.scss", fbase);
-    uri_base  = dirname(r->uri);
-    css_uri   = apr_psprintf(r->pool, "%s/%s", uri_base, basename(css_name));
-    map_uri   = apr_psprintf(r->pool, "%s/%s", uri_base, basename(map_name));
 
-    if (!exists(scss_name)) {
+    if (exists(sass_name)) {
+        is_sass = 1;
+    }
+
+    if (!is_sass && !exists(scss_name)) {
         return DECLINED;
     }
 
@@ -177,7 +193,6 @@ sass_handler(request_rec *r)
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    context->options.include_paths = config->include_paths;
     if (apr_strnatcasecmp(config->output_style, "expanded") == 0) {
         context->options.output_style = SASS_STYLE_EXPANDED;
     }
@@ -189,11 +204,26 @@ sass_handler(request_rec *r)
     } else {
         context->options.output_style = SASS_STYLE_NESTED;
     }
-    context->options.source_map_file = map_uri;
-    context->options.source_comments = 0;
-    context->options.source_map_contents = 1;
-    context->input_path = scss_name;
-    context->output_path = css_uri;
+    context->options.source_comments = config->source_comments;
+    context->options.omit_source_map_url = config->omit_source_map_url;
+    context->options.source_map_embed = config->source_map_embed;
+    context->options.source_map_contents = config->source_map_contents;
+    context->options.source_map_root = config->source_map_root;
+    context->options.include_paths = config->include_paths;
+    context->options.plugin_paths = config->plugin_paths;
+    if (config->precision > 0) {
+        context->options.precision = config->precision;
+    }
+
+    context->options.is_indented_syntax_src = is_sass;
+    if (is_sass) {
+        context->input_path = sass_name;
+    } else {
+        context->input_path = scss_name;
+    }
+
+    context->options.source_map_file = map_name;
+    context->output_path = css_name;
 
     sass_compile_file(context);
 
@@ -241,7 +271,14 @@ sass_create_dir_config(apr_pool_t *p, char *dir)
         config->is_output = 0;
         config->display_error = 0;
         config->output_style = "";
+        config->source_comments = 0;
+        config->omit_source_map_url = 0;
+        config->source_map_embed = 0;
+        config->source_map_contents = 0;
+        config->source_map_root = "";
         config->include_paths = "";
+        config->plugin_paths = "";
+        config->precision = 0;
     }
 
     return (void *)config;
@@ -274,12 +311,54 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
     } else {
         config->output_style = base->output_style;
     }
+
+    if (override->source_comments != 0) {
+        config->source_comments = 1;
+    } else {
+        config->source_comments = base->source_comments;
+    }
+
+    if (override->omit_source_map_url != 0) {
+        config->omit_source_map_url = 1;
+    } else {
+        config->omit_source_map_url = base->omit_source_map_url;
+    }
+
+    if (override->source_map_embed != 0) {
+        config->source_map_embed = 1;
+    } else {
+        config->source_map_embed = base->source_map_embed;
+    }
+
+    if (override->source_map_contents != 0) {
+        config->source_map_contents = 1;
+    } else {
+        config->source_map_contents = base->source_map_contents;
+    }
+
+    if (override->source_map_root && strlen(override->source_map_root) > 0) {
+        config->source_map_root = override->source_map_root;
+    } else {
+        config->source_map_root = base->source_map_root;
+    }
+
     if (override->include_paths && strlen(override->include_paths) > 0) {
         config->include_paths = override->include_paths;
     } else {
         config->include_paths = base->include_paths;
     }
 
+    if (override->plugin_paths && strlen(override->plugin_paths) > 0) {
+        config->plugin_paths = override->plugin_paths;
+    } else {
+        config->plugin_paths = base->plugin_paths;
+    }
+
+    if (override->precision > 0) {
+        config->precision = override->precision;
+    } else {
+        config->precision = base->precision;
+    }
 
     return (void *)config;
 }
@@ -289,16 +368,37 @@ static const command_rec sass_cmds[] =
 {
     AP_INIT_FLAG("SassOutput", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, is_output),
-                 RSRC_CONF|ACCESS_CONF, "sass output (css) to 'on' or 'off'"),
+                 RSRC_CONF|ACCESS_CONF, "Save CSS output to file"),
     AP_INIT_FLAG("SassDisplayError", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, display_error),
-                 RSRC_CONF|ACCESS_CONF, "sass display error to 'on' or 'off'"),
+                 RSRC_CONF|ACCESS_CONF, "Display errors in the browser"),
     AP_INIT_TAKE1("SassOutputStyle", ap_set_string_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, output_style),
-                 RSRC_CONF|ACCESS_CONF, "sass output style"),
+                 RSRC_CONF|ACCESS_CONF, "Output style for the generated css code (Expanded | Nested | Compact | Compressed)"),
+    AP_INIT_FLAG("SassSourceComments", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, source_comments),
+                 RSRC_CONF|ACCESS_CONF, "If you want inline source comments"),
+    AP_INIT_FLAG("SassOmitSourceMapUrl", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, omit_source_map_url),
+                 RSRC_CONF|ACCESS_CONF, "Disable sourceMappingUrl in css output"),
+    AP_INIT_FLAG("SassSourceMapEmbed", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, source_map_embed),
+                 RSRC_CONF|ACCESS_CONF, "Embed sourceMappingUrl as data uri"),
+    AP_INIT_FLAG("SassSourceMapContents", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, source_map_contents),
+                 RSRC_CONF|ACCESS_CONF, "Embed include contents in maps"),
+    AP_INIT_TAKE1("SassSourceMapRoot", ap_set_string_slot,
+                  (void *)APR_OFFSETOF(sass_dir_config_t, source_map_root),
+                  RSRC_CONF|ACCESS_CONF, "Pass-through as sourceRoot property"),
     AP_INIT_TAKE1("SassIncludePaths", ap_set_string_slot,
                   (void *)APR_OFFSETOF(sass_dir_config_t, include_paths),
-                  RSRC_CONF|ACCESS_CONF, "sass include paths"),
+                  RSRC_CONF|ACCESS_CONF, "Colon-separated list include of paths; Semicolon-separated on Windows"),
+    AP_INIT_TAKE1("SassPluginPaths", ap_set_string_slot,
+                  (void *)APR_OFFSETOF(sass_dir_config_t, plugin_paths),
+                  RSRC_CONF|ACCESS_CONF, "Colon-separated list plugin of paths; Semicolon-separated on Windows"),
+    AP_INIT_TAKE1("SassPrecision", ap_set_int_slot,
+                  (void *)APR_OFFSETOF(sass_dir_config_t, precision),
+                  RSRC_CONF|ACCESS_CONF, "Precision for outputting fractional numbers"),
     { NULL }
 };
 

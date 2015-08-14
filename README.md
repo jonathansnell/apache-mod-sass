@@ -24,10 +24,8 @@ mod_sass is Sass handler module for Apache HTTPD Server.
 sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
 
     # Handler sass script
-    AddHandler sass-script .scss
-
-    # Output style [Expanded | Nested | Compact | Compressed]
-    SassOutputStyle Nested
+    AddHandler sass-script .css
+    AddHandler sass-script .map
 
     # Output to CSS file [On | Off]
     SassOutput Off
@@ -35,8 +33,36 @@ sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
     # Display error [On | Off]
     DisplayError Off
 
-    # Include paths (optimal) [PATH]
+    # Output style [Expanded | Nested | Compact | Compressed]
+    SassOutputStyle Nested
+
+                 RSRC_CONF|ACCESS_CONF, ""),
+                 RSRC_CONF|ACCESS_CONF, ""),
+                 RSRC_CONF|ACCESS_CONF, ""),
+
+    # If you want inline source comments [On | Off]
+    SassSourceComments Off
+
+    # Disable sourceMappingUrl in css output [On | Off]
+    SassOmitSourceMapUrl Off
+
+    # Embed sourceMappingUrl as data uri [On | Off]
+    SassSourceMapEmbed Off
+
+    # Embed include contents in maps [On | Off]
+    SassSourceMapContents Off
+
+    # Pass-through as sourceRoot property
+    SassSourceMapRoot path/to/src
+
+    # Colon-separated list include of paths; Semicolon-separated on Windows
     SassIncludePaths path/to/inc
+
+    # Colon-separated list plugin of paths; Semicolon-separated on Windows
+    SassIncludePaths path/to/plugins
+
+    # Precision for outputting fractional numbers
+    SassPrecision 5
 
 ## Example
 
