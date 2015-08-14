@@ -19,6 +19,8 @@ ltmain.sh
 m4
 missing
 mod_sass.la
+mod_sass.lo
+mod_sass.slo
 mod_sass_la-mod_sass.lo
 mod_sass_la-mod_sass.o
 stamp-h1

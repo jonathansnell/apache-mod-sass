@@ -62,15 +62,16 @@
                   p, "[SASS_DEBUG] %s(%d): "format, __FILE__, __LINE__, ##args)
 
 /* default parameter */
-#define SASS_DEFAULT_CONTENT_TYPE "text/css"
+#define SASS_CONTENT_TYPE_CSS        "text/css"
+#define SASS_CONTENT_TYPE_SOURCE_MAP "application/json"
+#define SASS_CONTENT_TYPE_ERROR      "text/plain"
 
 /* sass dir config */
 typedef struct {
-    int is_compressed;
     int is_output;
     int display_error;
+    char *output_style;
     char *include_paths;
-    char *image_path;
 } sass_dir_config_t;
 
 module AP_MODULE_DECLARE_DATA sass_module;
@@ -127,8 +128,6 @@ sass_handler(request_rec *r)
         return DECLINED;
     }
 
-    /* content type */
-    r->content_type = SASS_DEFAULT_CONTENT_TYPE;
 
     if (!r->header_only) {
         config = ap_get_module_config(r->per_dir_config, &sass_module);
@@ -138,17 +137,27 @@ sass_handler(request_rec *r)
         }
 
         context->options.include_paths = config->include_paths;
-        context->options.image_path = config->image_path;
-        if (config->is_compressed) {
+        if (apr_strnatcasecmp(config->output_style, "expanded") == 0) {
+            context->options.output_style = SASS_STYLE_EXPANDED;
+        }
+        else if (apr_strnatcasecmp(config->output_style, "compact") == 0) {
+            context->options.output_style = SASS_STYLE_COMPACT;
+        }
+        else if (apr_strnatcasecmp(config->output_style, "compressed") == 0) {
             context->options.output_style = SASS_STYLE_COMPRESSED;
         } else {
             context->options.output_style = SASS_STYLE_NESTED;
         }
+        context->options.source_map_file = "?map";
+        context->options.source_comments = 0;
+        context->options.source_map_contents = 1;
         context->input_path = r->filename;
+        context->output_path = basename(r->filename);
 
         sass_compile_file(context);
 
         if (context->error_status) {
+            r->content_type = SASS_CONTENT_TYPE_ERROR;
             if (context->error_message) {
                 ap_rprintf(r, "%s", context->error_message);
             } else {
@@ -157,12 +166,17 @@ sass_handler(request_rec *r)
             if (!config->display_error) {
                 retval = HTTP_INTERNAL_SERVER_ERROR;
             }
+        } else if (r->args && apr_strnatcasecmp(r->args, "map") == 0) {
+            r->content_type = SASS_CONTENT_TYPE_SOURCE_MAP;
+            ap_rprintf(r, "%s", context->source_map_string);
         } else if (context->output_string) {
+            r->content_type = SASS_CONTENT_TYPE_CSS;
             ap_rprintf(r, "%s", context->output_string);
             if (config->is_output) {
                 sass_output_file(r, context->output_string);
             }
         } else {
+            r->content_type = SASS_CONTENT_TYPE_ERROR;
             ap_rputs("Unknown internal error.", r);
             if (!config->display_error) {
                 retval = HTTP_INTERNAL_SERVER_ERROR;
@@ -184,11 +198,10 @@ sass_create_dir_config(apr_pool_t *p, char *dir)
     if (config) {
         memset(config, 0, sizeof(sass_dir_config_t));
 
-        config->is_compressed = 0;
         config->is_output = 0;
         config->display_error = 0;
+        config->output_style = "";
         config->include_paths = "";
-        config->image_path = "";
     }
 
     return (void *)config;
@@ -203,11 +216,6 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
     sass_dir_config_t *base = (sass_dir_config_t *)base_conf;
     sass_dir_config_t *override = (sass_dir_config_t *)override_conf;
 
-    if (override->is_compressed != 0) {
-        config->is_compressed = 1;
-    } else {
-        config->is_compressed = base->is_compressed;
-    }
 
     if (override->is_output != 0) {
         config->is_output = 1;
@@ -221,17 +229,17 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
         config->display_error = base->display_error;
     }
 
+    if (override->output_style && strlen(override->output_style) > 0) {
+        config->output_style = override->output_style;
+    } else {
+        config->output_style = base->output_style;
+    }
     if (override->include_paths && strlen(override->include_paths) > 0) {
         config->include_paths = override->include_paths;
     } else {
         config->include_paths = base->include_paths;
     }
 
-    if (override->image_path && strlen(override->image_path) > 0) {
-        config->image_path = override->image_path;
-    } else {
-        config->image_path = base->image_path;
-    }
 
     return (void *)config;
 }
@@ -239,21 +247,18 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
 /* Commands */
 static const command_rec sass_cmds[] =
 {
-    AP_INIT_FLAG("SassCompressed", ap_set_flag_slot,
-                 (void *)APR_OFFSETOF(sass_dir_config_t, is_compressed),
-                 RSRC_CONF|ACCESS_CONF, "sass compressed to 'on' or 'off'"),
     AP_INIT_FLAG("SassOutput", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, is_output),
                  RSRC_CONF|ACCESS_CONF, "sass output (css) to 'on' or 'off'"),
     AP_INIT_FLAG("SassDisplayError", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, display_error),
                  RSRC_CONF|ACCESS_CONF, "sass display error to 'on' or 'off'"),
+    AP_INIT_TAKE1("SassOutputStyle", ap_set_string_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, output_style),
+                 RSRC_CONF|ACCESS_CONF, "sass output style"),
     AP_INIT_TAKE1("SassIncludePaths", ap_set_string_slot,
                   (void *)APR_OFFSETOF(sass_dir_config_t, include_paths),
                   RSRC_CONF|ACCESS_CONF, "sass include paths"),
-    AP_INIT_TAKE1("SassImagePath", ap_set_string_slot,
-                  (void *)APR_OFFSETOF(sass_dir_config_t, image_path),
-                  RSRC_CONF|ACCESS_CONF, "sass image path"),
     { NULL }
 };
 

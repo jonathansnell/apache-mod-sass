@@ -3,11 +3,11 @@
 all: build
 
 build:
-	apxs  -L/usr/local/lib/ -lsass -c mod_sass.c
+	apxs  -L/usr/local/lib/ -lsass -lstdc++ -c mod_sass.c
 
-install: 
+install:
 	apxs -i -a mod_sass.la
 
-clean: 
+clean:
 	@rm -f mod_sass.lo mod_sass.la mod_sass.slo
 	@rm -Rf .libs
