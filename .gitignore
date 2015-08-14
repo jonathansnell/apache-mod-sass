@@ -1,6 +1,5 @@
 .deps
 .libs
-Makefile
 Makefile.in
 aclocal.m4
 ar-lib
@@ -24,3 +23,4 @@ mod_sass_la-mod_sass.lo
 mod_sass_la-mod_sass.o
 stamp-h1
 *~
+libsass

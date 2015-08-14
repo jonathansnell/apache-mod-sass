@@ -75,6 +75,14 @@ typedef struct {
 
 module AP_MODULE_DECLARE_DATA sass_module;
 
+// Stackoverflow script to get filename extention
+char *get_filename_ext(const char *filename) {
+	const char *dot = strrchr(filename, '.');
+	if(!dot || dot == filename) return "";
+		return (char*)dot;
+}
+
+
 /* output css file */
 static void
 sass_output_file(request_rec *r, char *data)
@@ -84,7 +92,7 @@ sass_output_file(request_rec *r, char *data)
     apr_size_t bytes;
     apr_file_t *file = NULL;
 
-    ext = strstr(r->filename, ".");
+    ext = get_filename_ext(r->filename);
 
     if (!data || !ext) {
         return;
