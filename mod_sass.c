@@ -6,13 +6,16 @@
 **    # httpd.conf
 **    LoadModule sass_module modules/mod_sass.so
 **    <IfModule sass_module>
-**      AddHandler sass-script .scss
-**      SassCompressed   Off (On | Off)
+**      AddHandler sass-script .css
+**      AddHandler sass-script .map
+**      SassOutputStyle  Nested (Expanded | Nested | Compact | Compressed)
 **      SassOutput       Off (On | Off)
 **      SassDisplayError Off (On | Off)
 **      SassIncludePaths path/to/sass
 **    </IfModule sass_module>
 */
+
+#include <libgen.h>
 
 /* httpd */
 #include "httpd.h"
@@ -61,7 +64,7 @@
     ap_log_perror(APLOG_MARK, SASS_DEBUG_LOG_LEVEL, 0,                  \
                   p, "[SASS_DEBUG] %s(%d): "format, __FILE__, __LINE__, ##args)
 
-/* default parameter */
+/* content types */
 #define SASS_CONTENT_TYPE_CSS        "text/css"
 #define SASS_CONTENT_TYPE_SOURCE_MAP "application/json"
 #define SASS_CONTENT_TYPE_ERROR      "text/plain"
@@ -77,23 +80,31 @@ typedef struct {
 module AP_MODULE_DECLARE_DATA sass_module;
 
 // Stackoverflow script to get filename extention
-char *get_filename_ext(const char *filename) {
+const char *get_filename_ext(const char *filename) {
 	const char *dot = strrchr(filename, '.');
-	if(!dot || dot == filename) return "";
-		return (char*)dot;
+	if(!dot || dot == filename) return NULL;
+		return dot;
 }
 
+int exists(const char *filename) {
+    FILE *f;
+    if (f = fopen(filename, "r")) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+}
 
 /* output css file */
 static void
 sass_output_file(request_rec *r, char *data)
 {
-    char *ext, *fbase, *fname;
+    char *fbase, *fname;
     apr_status_t rc;
     apr_size_t bytes;
     apr_file_t *file = NULL;
 
-    ext = get_filename_ext(r->filename);
+    const char *ext = get_filename_ext(r->filename);
 
     if (!data || !ext) {
         return;
@@ -123,68 +134,97 @@ sass_handler(request_rec *r)
     int retval = OK;
     sass_dir_config_t *config;
     struct sass_file_context *context;
+    char *css_name, *map_name, *scss_name;
+    char *uri_base, *css_uri, *map_uri;
+    int is_css = 0;
+    int is_map = 0;
 
-    if (strcmp(r->handler, "sass-script")) {
+    const char *ext = get_filename_ext(r->filename);
+    const char *fbase = apr_pstrndup(r->pool, r->filename, ext - r->filename);
+
+    if (apr_strnatcasecmp(r->handler, "sass-script") != 0) {
         return DECLINED;
     }
 
-
-    if (!r->header_only) {
-        config = ap_get_module_config(r->per_dir_config, &sass_module);
-        context = sass_new_file_context();
-        if (!context) {
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
-
-        context->options.include_paths = config->include_paths;
-        if (apr_strnatcasecmp(config->output_style, "expanded") == 0) {
-            context->options.output_style = SASS_STYLE_EXPANDED;
-        }
-        else if (apr_strnatcasecmp(config->output_style, "compact") == 0) {
-            context->options.output_style = SASS_STYLE_COMPACT;
-        }
-        else if (apr_strnatcasecmp(config->output_style, "compressed") == 0) {
-            context->options.output_style = SASS_STYLE_COMPRESSED;
-        } else {
-            context->options.output_style = SASS_STYLE_NESTED;
-        }
-        context->options.source_map_file = "?map";
-        context->options.source_comments = 0;
-        context->options.source_map_contents = 1;
-        context->input_path = r->filename;
-        context->output_path = basename(r->filename);
-
-        sass_compile_file(context);
-
-        if (context->error_status) {
-            r->content_type = SASS_CONTENT_TYPE_ERROR;
-            if (context->error_message) {
-                ap_rprintf(r, "%s", context->error_message);
-            } else {
-                ap_rputs("An error occured; no error message available.", r);
-            }
-            if (!config->display_error) {
-                retval = HTTP_INTERNAL_SERVER_ERROR;
-            }
-        } else if (r->args && apr_strnatcasecmp(r->args, "map") == 0) {
-            r->content_type = SASS_CONTENT_TYPE_SOURCE_MAP;
-            ap_rprintf(r, "%s", context->source_map_string);
-        } else if (context->output_string) {
-            r->content_type = SASS_CONTENT_TYPE_CSS;
-            ap_rprintf(r, "%s", context->output_string);
-            if (config->is_output) {
-                sass_output_file(r, context->output_string);
-            }
-        } else {
-            r->content_type = SASS_CONTENT_TYPE_ERROR;
-            ap_rputs("Unknown internal error.", r);
-            if (!config->display_error) {
-                retval = HTTP_INTERNAL_SERVER_ERROR;
-            }
-        }
-
-        sass_free_file_context(context);
+    if (apr_strnatcasecmp(ext, ".css") == 0) {
+        is_css = 1;
+    } else if (apr_strnatcasecmp(ext, ".map") == 0) {
+        is_map = 1;
     }
+
+    if (!is_css && !is_map) {
+        return DECLINED;
+    }
+
+    css_name  = apr_psprintf(r->pool, "%s.css",  fbase);
+    map_name  = apr_psprintf(r->pool, "%s.map",  fbase);
+    scss_name = apr_psprintf(r->pool, "%s.scss", fbase);
+    uri_base  = dirname(r->uri);
+    css_uri   = apr_psprintf(r->pool, "%s/%s", uri_base, basename(css_name));
+    map_uri   = apr_psprintf(r->pool, "%s/%s", uri_base, basename(map_name));
+
+    if (!exists(scss_name)) {
+        return DECLINED;
+    }
+
+    if (M_GET != r->method_number) {
+        return HTTP_METHOD_NOT_ALLOWED;
+    }
+
+    config = ap_get_module_config(r->per_dir_config, &sass_module);
+    context = sass_new_file_context();
+    if (!context) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    context->options.include_paths = config->include_paths;
+    if (apr_strnatcasecmp(config->output_style, "expanded") == 0) {
+        context->options.output_style = SASS_STYLE_EXPANDED;
+    }
+    else if (apr_strnatcasecmp(config->output_style, "compact") == 0) {
+        context->options.output_style = SASS_STYLE_COMPACT;
+    }
+    else if (apr_strnatcasecmp(config->output_style, "compressed") == 0) {
+        context->options.output_style = SASS_STYLE_COMPRESSED;
+    } else {
+        context->options.output_style = SASS_STYLE_NESTED;
+    }
+    context->options.source_map_file = map_uri;
+    context->options.source_comments = 0;
+    context->options.source_map_contents = 1;
+    context->input_path = scss_name;
+    context->output_path = css_uri;
+
+    sass_compile_file(context);
+
+    if (context->error_status) {
+        r->content_type = SASS_CONTENT_TYPE_ERROR;
+        if (context->error_message) {
+            ap_rprintf(r, "%s", context->error_message);
+        } else {
+            ap_rputs("An error occured; no error message available.", r);
+        }
+        if (!config->display_error) {
+            retval = HTTP_INTERNAL_SERVER_ERROR;
+        }
+    } else if (is_map && context->source_map_string) {
+        r->content_type = SASS_CONTENT_TYPE_SOURCE_MAP;
+        ap_rprintf(r, "%s", context->source_map_string);
+    } else if (context->output_string) {
+        r->content_type = SASS_CONTENT_TYPE_CSS;
+        ap_rprintf(r, "%s", context->output_string);
+        if (config->is_output) {
+            sass_output_file(r, context->output_string);
+        }
+    } else {
+        r->content_type = SASS_CONTENT_TYPE_ERROR;
+        ap_rputs("Unknown internal error.", r);
+        if (!config->display_error) {
+            retval = HTTP_INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    sass_free_file_context(context);
 
     return retval;
 }

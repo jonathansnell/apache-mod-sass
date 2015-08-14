@@ -27,10 +27,13 @@ sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
     AddHandler sass-script .scss
 
     # Output style [Expanded | Nested | Compact | Compressed]
-    SassOutputStyle On
+    SassOutputStyle Nested
 
     # Output to CSS file [On | Off]
     SassOutput Off
+
+    # Display error [On | Off]
+    DisplayError Off
 
     # Include paths (optimal) [PATH]
     SassIncludePaths path/to/inc
