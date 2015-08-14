@@ -36,10 +36,6 @@ sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
     # Output style [Expanded | Nested | Compact | Compressed]
     SassOutputStyle Nested
 
-                 RSRC_CONF|ACCESS_CONF, ""),
-                 RSRC_CONF|ACCESS_CONF, ""),
-                 RSRC_CONF|ACCESS_CONF, ""),
-
     # If you want inline source comments [On | Off]
     SassSourceComments Off
 
