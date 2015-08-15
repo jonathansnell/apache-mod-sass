@@ -27,8 +27,8 @@ sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
     AddHandler sass-script .css
     AddHandler sass-script .map
 
-    # Output to CSS file [On | Off]
-    SassOutput Off
+    # Output to CSS/source map file [On | Off]
+    SassSaveOutput Off
 
     # Display error [On | Off]
     DisplayError Off
@@ -38,6 +38,9 @@ sass.conf (On Debian: /etc/apache2/mods-available/sass.conf):
 
     # If you want inline source comments [On | Off]
     SassSourceComments Off
+
+    # Generate a source map [On | Off]
+    SassSourceMap Off
 
     # Disable sourceMappingUrl in css output [On | Off]
     SassOmitSourceMapUrl Off

@@ -8,10 +8,11 @@
 **    <IfModule sass_module>
 **      AddHandler            sass-script .css
 **      AddHandler            sass-script .map
-**      SassOutput            Off (On | Off)
+**      SassSaveOutput        Off (On | Off)
 **      SassDisplayError      Off (On | Off)
 **      SassOutputStyle       Nested (Expanded | Nested | Compact | Compressed)
 **      SassSourceComments    Off (On | Off)
+**      SassSourceMap         Off (On | Off)
 **      SassOmitSourceMapUrl  Off (On | Off)
 **      SassSourceMapEmbed    Off (On | Off)
 **      SassSourceMapContents Off (On | Off)
@@ -21,8 +22,6 @@
 **      SassPrecision         Precision for outputting fractional numbers
 **    </IfModule sass_module>
 */
-
-#include <libgen.h>
 
 /* httpd */
 #include "httpd.h"
@@ -35,14 +34,6 @@
 
 /* libsass */
 #include "libsass/sass_interface.h"
-
-#ifdef HAVE_CONFIG_H
-#  undef PACKAGE_NAME
-#  undef PACKAGE_STRING
-#  undef PACKAGE_TARNAME
-#  undef PACKAGE_VERSION
-#  include "config.h"
-#endif
 
 /* log */
 #ifdef AP_SASS_DEBUG_LOG_LEVEL
@@ -78,10 +69,11 @@
 
 /* sass dir config */
 typedef struct {
-    int is_output;
+    int save_output;
     int display_error;
     char *output_style;
     int source_comments;
+    int source_map;
     int omit_source_map_url;
     int source_map_embed;
     int source_map_contents;
@@ -111,33 +103,28 @@ int exists(const char *filename) {
 
 /* output css file */
 static void
-sass_output_file(request_rec *r, char *data)
+sass_output_file(request_rec *r, char *filename, char *data)
 {
-    char *fbase, *fname;
     apr_status_t rc;
     apr_size_t bytes;
     apr_file_t *file = NULL;
 
-    const char *ext = get_filename_ext(r->filename);
-
-    if (!data || !ext) {
+    if (!data) {
         return;
     }
 
-    fbase = apr_pstrndup(r->pool, r->filename, ext - r->filename);
-    fname = apr_psprintf(r->pool, "%s.css", fbase);
-
-    rc = apr_file_open(&file, fname, APR_WRITE | APR_CREATE,
-                       APR_UREAD | APR_UWRITE | APR_GREAD, r->pool);
+    rc = apr_file_open(&file, filename,
+                       APR_FOPEN_WRITE | APR_FOPEN_CREATE | APR_FOPEN_TRUNCATE,
+                       APR_FPROT_OS_DEFAULT, r->pool);
     if (rc == APR_SUCCESS) {
         bytes = strlen(data);
         rc = apr_file_write(file, data, &bytes);
         if (rc != APR_SUCCESS) {
-            _RERR(r, "Can't create/write to file: %s", fname);
+            _RERR(r, "Can't create/write to file: %s", filename);
         }
         apr_file_close(file);
     } else {
-        _RERR(r, "Can't create/write to file: %s", fname);
+        _RERR(r, "Can't create/write to file: %s", filename);
     }
 }
 
@@ -188,6 +175,11 @@ sass_handler(request_rec *r)
     }
 
     config = ap_get_module_config(r->per_dir_config, &sass_module);
+
+    if (config->source_map < 1 && is_map) {
+        return DECLINED;
+    }
+
     context = sass_new_file_context();
     if (!context) {
         return HTTP_INTERNAL_SERVER_ERROR;
@@ -204,10 +196,10 @@ sass_handler(request_rec *r)
     } else {
         context->options.output_style = SASS_STYLE_NESTED;
     }
-    context->options.source_comments = config->source_comments;
-    context->options.omit_source_map_url = config->omit_source_map_url;
-    context->options.source_map_embed = config->source_map_embed;
-    context->options.source_map_contents = config->source_map_contents;
+    context->options.source_comments = (config->source_comments > 0);
+    context->options.omit_source_map_url = (config->omit_source_map_url > 0);
+    context->options.source_map_embed = (config->source_map_embed > 0);
+    context->options.source_map_contents = (config->source_map_contents > 0);
     context->options.source_map_root = config->source_map_root;
     context->options.include_paths = config->include_paths;
     context->options.plugin_paths = config->plugin_paths;
@@ -222,7 +214,9 @@ sass_handler(request_rec *r)
         context->input_path = scss_name;
     }
 
-    context->options.source_map_file = map_name;
+    if (config->source_map > 0) {
+        context->options.source_map_file = map_name;
+    }
     context->output_path = css_name;
 
     sass_compile_file(context);
@@ -234,22 +228,31 @@ sass_handler(request_rec *r)
         } else {
             ap_rputs("An error occured; no error message available.", r);
         }
-        if (!config->display_error) {
+        if (config->display_error < 1) {
             retval = HTTP_INTERNAL_SERVER_ERROR;
         }
     } else if (is_map && context->source_map_string) {
         r->content_type = SASS_CONTENT_TYPE_SOURCE_MAP;
         ap_rprintf(r, "%s", context->source_map_string);
+        if (config->save_output > 0) {
+            sass_output_file(r, map_name, context->source_map_string);
+            if (context->output_string) {
+                sass_output_file(r, css_name, context->output_string);
+            }
+        }
     } else if (context->output_string) {
         r->content_type = SASS_CONTENT_TYPE_CSS;
         ap_rprintf(r, "%s", context->output_string);
-        if (config->is_output) {
-            sass_output_file(r, context->output_string);
+        if (config->save_output > 0) {
+            if ((config->source_map > 0) && context->source_map_string) {
+                sass_output_file(r, map_name, context->source_map_string);
+            }
+            sass_output_file(r, css_name, context->output_string);
         }
     } else {
         r->content_type = SASS_CONTENT_TYPE_ERROR;
         ap_rputs("Unknown internal error.", r);
-        if (!config->display_error) {
+        if (config->display_error < 1) {
             retval = HTTP_INTERNAL_SERVER_ERROR;
         }
     }
@@ -268,13 +271,14 @@ sass_create_dir_config(apr_pool_t *p, char *dir)
     if (config) {
         memset(config, 0, sizeof(sass_dir_config_t));
 
-        config->is_output = 0;
-        config->display_error = 0;
+        config->save_output = -1;
+        config->display_error = -1;
         config->output_style = "";
-        config->source_comments = 0;
-        config->omit_source_map_url = 0;
-        config->source_map_embed = 0;
-        config->source_map_contents = 0;
+        config->source_comments = -1;
+        config->source_map = -1;
+        config->omit_source_map_url = -1;
+        config->source_map_embed = -1;
+        config->source_map_contents = -1;
         config->source_map_root = "";
         config->include_paths = "";
         config->plugin_paths = "";
@@ -293,72 +297,53 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
     sass_dir_config_t *base = (sass_dir_config_t *)base_conf;
     sass_dir_config_t *override = (sass_dir_config_t *)override_conf;
 
+    config->save_output         = (override->save_output > -1) ?
+                                   override->save_output :
+                                   base->save_output;
 
-    if (override->is_output != 0) {
-        config->is_output = 1;
-    } else {
-        config->is_output = base->is_output;
-    }
+    config->display_error       = (override->display_error > -1) ?
+                                   override->display_error :
+                                   base->display_error;
 
-    if (override->display_error != 0) {
-        config->display_error = 1;
-    } else {
-        config->display_error = base->display_error;
-    }
+    config->output_style        = strlen(override->output_style) ?
+                                   override->output_style :
+                                   base->output_style;
 
-    if (override->output_style && strlen(override->output_style) > 0) {
-        config->output_style = override->output_style;
-    } else {
-        config->output_style = base->output_style;
-    }
+    config->source_comments     = (override->source_comments > -1) ?
+                                   override->source_comments :
+                                   base->source_comments;
 
-    if (override->source_comments != 0) {
-        config->source_comments = 1;
-    } else {
-        config->source_comments = base->source_comments;
-    }
+    config->source_map          = (override->source_map > -1) ?
+                                   override->source_map :
+                                   base->source_map;
 
-    if (override->omit_source_map_url != 0) {
-        config->omit_source_map_url = 1;
-    } else {
-        config->omit_source_map_url = base->omit_source_map_url;
-    }
+    config->omit_source_map_url = (override->omit_source_map_url > -1) ?
+                                   override->omit_source_map_url :
+                                   base->omit_source_map_url;
 
-    if (override->source_map_embed != 0) {
-        config->source_map_embed = 1;
-    } else {
-        config->source_map_embed = base->source_map_embed;
-    }
+    config->source_map_embed    = (override->source_map_embed > -1) ?
+                                   override->source_map_embed :
+                                   base->source_map_embed;
 
-    if (override->source_map_contents != 0) {
-        config->source_map_contents = 1;
-    } else {
-        config->source_map_contents = base->source_map_contents;
-    }
+    config->source_map_contents = (override->source_map_contents > -1) ?
+                                   override->source_map_contents :
+                                   base->source_map_contents;
 
-    if (override->source_map_root && strlen(override->source_map_root) > 0) {
-        config->source_map_root = override->source_map_root;
-    } else {
-        config->source_map_root = base->source_map_root;
-    }
+    config->source_map_root     = strlen(override->source_map_root) ?
+                                   override->source_map_root :
+                                   base->source_map_root;
 
-    if (override->include_paths && strlen(override->include_paths) > 0) {
-        config->include_paths = override->include_paths;
-    } else {
-        config->include_paths = base->include_paths;
-    }
+    config->include_paths       = strlen(override->include_paths) ?
+                                   override->include_paths :
+                                   base->include_paths;
 
-    if (override->plugin_paths && strlen(override->plugin_paths) > 0) {
-        config->plugin_paths = override->plugin_paths;
-    } else {
-        config->plugin_paths = base->plugin_paths;
-    }
+    config->plugin_paths        = strlen(override->plugin_paths) ?
+                                   override->plugin_paths :
+                                   base->plugin_paths;
 
-    if (override->precision > 0) {
-        config->precision = override->precision;
-    } else {
-        config->precision = base->precision;
-    }
+    config->precision           = (override->precision > 0) ?
+                                   override->precision :
+                                   base->precision;
 
     return (void *)config;
 }
@@ -366,9 +351,9 @@ sass_merge_dir_config(apr_pool_t *p, void *base_conf, void *override_conf)
 /* Commands */
 static const command_rec sass_cmds[] =
 {
-    AP_INIT_FLAG("SassOutput", ap_set_flag_slot,
-                 (void *)APR_OFFSETOF(sass_dir_config_t, is_output),
-                 RSRC_CONF|ACCESS_CONF, "Save CSS output to file"),
+    AP_INIT_FLAG("SassSaveOutput", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, save_output),
+                 RSRC_CONF|ACCESS_CONF, "Save CSS/source map output to file"),
     AP_INIT_FLAG("SassDisplayError", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, display_error),
                  RSRC_CONF|ACCESS_CONF, "Display errors in the browser"),
@@ -378,6 +363,9 @@ static const command_rec sass_cmds[] =
     AP_INIT_FLAG("SassSourceComments", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, source_comments),
                  RSRC_CONF|ACCESS_CONF, "If you want inline source comments"),
+    AP_INIT_FLAG("SassSourceMap", ap_set_flag_slot,
+                 (void *)APR_OFFSETOF(sass_dir_config_t, source_map),
+                 RSRC_CONF|ACCESS_CONF, "Generate a source map"),
     AP_INIT_FLAG("SassOmitSourceMapUrl", ap_set_flag_slot,
                  (void *)APR_OFFSETOF(sass_dir_config_t, omit_source_map_url),
                  RSRC_CONF|ACCESS_CONF, "Disable sourceMappingUrl in css output"),
