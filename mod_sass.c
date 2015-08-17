@@ -37,6 +37,9 @@
 #include "sass_context.h"
 #include "b64/cencode.h"
 
+/* libcurl */
+#include <curl/curl.h>
+
 /* log */
 #ifdef AP_SASS_DEBUG_LOG_LEVEL
 #define SASS_DEBUG_LOG_LEVEL AP_SASS_DEBUG_LOG_LEVEL
@@ -166,6 +169,29 @@ union Sass_Value* call_fn_base64(const union Sass_Value* s_args,
     return sass_make_string(out);
 }
 
+union Sass_Value* call_fn_urlencode(const union Sass_Value* s_args,
+                                    Sass_Function_Entry cb,
+                                    struct Sass_Options* options)
+{
+    union Sass_Value *string_in, *string_out;
+    const char *in;
+    char *out;
+    CURL *curl;
+
+    curl = (CURL *)sass_function_get_cookie(cb);
+    if (curl) {
+        string_in = sass_list_get_value(s_args, 0);
+        in = sass_string_get_value(string_in);
+        out = curl_easy_escape(curl, in, strlen(in));
+        if (out) {
+            string_out = sass_make_string(out);
+            curl_free(out);
+        }
+    }
+
+    return string_out;
+}
+
 /* content handler */
 static int
 sass_handler(request_rec *r)
@@ -173,8 +199,9 @@ sass_handler(request_rec *r)
     int retval = OK;
     sass_dir_config_t *config;
     struct sass_file_context *context;
-    Sass_Function_Entry fn_base64;
+    Sass_Function_Entry fn_base64, fn_urlencode;
     Sass_Function_List fn_list;
+    CURL *curl;
     char *css_name, *map_name, *sass_name, *scss_name;
     int is_css = 0;
     int is_map = 0;
@@ -259,10 +286,14 @@ sass_handler(request_rec *r)
     }
     context->output_path = css_name;
 
-    fn_base64 = sass_make_function("base64($string)", call_fn_base64, r);
+    curl = curl_easy_init();
 
-    fn_list = sass_make_function_list(1);
+    fn_base64 = sass_make_function("base64($string)", call_fn_base64, r);
+    fn_urlencode = sass_make_function("urlencode($string)", call_fn_urlencode, curl);
+
+    fn_list = sass_make_function_list(2);
     sass_function_set_list_entry(fn_list, 0, fn_base64);
+    sass_function_set_list_entry(fn_list, 1, fn_urlencode);
     context->c_functions = fn_list;
 
     sass_compile_file(context);
@@ -304,6 +335,8 @@ sass_handler(request_rec *r)
     }
 
     sass_free_file_context(context);
+
+    curl_easy_cleanup(curl);
 
     return retval;
 }
