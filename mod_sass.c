@@ -33,7 +33,9 @@
 #include "apr_strings.h"
 
 /* libsass */
-#include "libsass/sass_interface.h"
+#include "sass_interface.h"
+#include "sass_context.h"
+#include "b64/cencode.h"
 
 /* log */
 #ifdef AP_SASS_DEBUG_LOG_LEVEL
@@ -128,6 +130,42 @@ sass_output_file(request_rec *r, char *filename, char *data)
     }
 }
 
+/* base64 encode string */
+char *base64_encode(request_rec *r, const char *input) {
+    char *output = (char *)apr_palloc(r->pool, ((strlen(input) * 4) / 3) + 1);
+
+    char *c = output;
+    int count = 0;
+    base64_encodestate s;
+
+    base64_init_encodestate(&s);
+    count = base64_encode_block(input, strlen(input), c, &s);
+    c += count;
+    count = base64_encode_blockend(c, &s);
+    /* the base64 encoder terminates the output with an unwanted linefeed */
+    c += count - 1;
+    *c = 0;
+
+    return output;
+}
+
+union Sass_Value* call_fn_base64(const union Sass_Value* s_args,
+                                 Sass_Function_Entry cb,
+                                 struct Sass_Options* options)
+{
+    request_rec *r;
+    union Sass_Value *string;
+    const char *in;
+    char *out;
+
+    r = (request_rec *)sass_function_get_cookie(cb);
+    string = sass_list_get_value(s_args, 0);
+    in = sass_string_get_value(string);
+    out = base64_encode(r, in);
+
+    return sass_make_string(out);
+}
+
 /* content handler */
 static int
 sass_handler(request_rec *r)
@@ -135,6 +173,8 @@ sass_handler(request_rec *r)
     int retval = OK;
     sass_dir_config_t *config;
     struct sass_file_context *context;
+    Sass_Function_Entry fn_base64;
+    Sass_Function_List fn_list;
     char *css_name, *map_name, *sass_name, *scss_name;
     int is_css = 0;
     int is_map = 0;
@@ -218,6 +258,12 @@ sass_handler(request_rec *r)
         context->options.source_map_file = map_name;
     }
     context->output_path = css_name;
+
+    fn_base64 = sass_make_function("base64($string)", call_fn_base64, r);
+
+    fn_list = sass_make_function_list(1);
+    sass_function_set_list_entry(fn_list, 0, fn_base64);
+    context->c_functions = fn_list;
 
     sass_compile_file(context);
 
