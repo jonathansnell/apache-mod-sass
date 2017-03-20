@@ -3,7 +3,7 @@
 all: build
 
 build:
-	apxs  -L/usr/local/lib/ -lsass -lstdc++ -c mod_sass.c
+	apxs -Ilibsass/include/ -L/usr/local/lib/ -lsass -lstdc++ -c mod_sass.c
 
 install:
 	apxs -i -a mod_sass.la

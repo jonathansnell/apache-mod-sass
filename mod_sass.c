@@ -33,7 +33,8 @@
 #include "apr_strings.h"
 
 /* libsass */
-#include "libsass/sass_interface.h"
+#include "sass.h"
+#include "sass/interface.h"
 
 /* log */
 #ifdef AP_SASS_DEBUG_LOG_LEVEL
